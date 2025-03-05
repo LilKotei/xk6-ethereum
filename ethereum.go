@@ -354,7 +354,7 @@ func (c *Client) pollForBlocks() {
 				panic(err)
 			}
 			if block == nil {
-				// We're not going to continue past this point if we don't have a block
+				// We're not going to continue past this point if we don't have a bloc
 				continue
 			}
 			lastBlockNumber = blockNumber
