@@ -340,114 +340,111 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 
 var blocks sync.Map
 
-// PollBlocks polls for new blocks and emits a "block" metric.
+// pollForBlocks polls for new blocks and emits block-related metrics.
 func (c *Client) pollForBlocks() {
-	var lastBlockNumber uint64
-	var prevBlock *ethgo.Block
+    ticker := time.NewTicker(500 * time.Millisecond)
+    defer ticker.Stop() // ✅ Stop the ticker when function exits
 
-	now := time.Now()
+    var lastBlockNumber uint64
+    var prevBlock *ethgo.Block
 
-	for range time.Tick(500 * time.Millisecond) {
-		blockNumber, err := c.BlockNumber()
-		if err != nil {
-			panic(err)
-		}
+    now := time.Now()
 
-		if blockNumber > lastBlockNumber {
-			// compute precise block time
-			blockTime := time.Since(now)
-			now = time.Now()
+    for {
+        select {
+        case <-c.vu.Context().Done(): // ✅ Stop the loop when the VU is finished
+            return
 
-			block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
-			if err != nil {
-				panic(err)
-			}
-			if block == nil {
-				// We're not going to continue past this point if we don't have a block
-				continue
-			}
-			lastBlockNumber = blockNumber
+        case <-ticker.C:
+            blockNumber, err := c.BlockNumber()
+            if err != nil {
+                fmt.Println("⚠️ Error fetching BlockNumber:", err)
+                continue
+            }
 
-			var blockTimestampDiff time.Duration
-			var tps float64
+            if blockNumber > lastBlockNumber {
+                // Compute precise block time
+                blockTime := time.Since(now)
+                now = time.Now()
 
-			if prevBlock != nil {
-				// compute block time
-				blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-				// Compute TPS
-				tps = float64(len(block.TransactionsHashes)) / float64(blockTimestampDiff.Seconds())
-			}
+                block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
+                if err != nil {
+                    fmt.Println("⚠️ Error fetching block:", err)
+                    continue
+                }
+                if block == nil {
+                    fmt.Println("⚠️ Warning: Block is nil, skipping...")
+                    continue
+                }
+                lastBlockNumber = blockNumber
 
-			prevBlock = block
+                var blockTimestampDiff time.Duration
+                var tps float64
 
-			rootTS := metrics.NewRegistry().RootTagSet()
-			if c.vu != nil && c.vu.State() != nil && rootTS != nil {
+                if prevBlock != nil {
+                    // Compute block time
+                    blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
+                    // Compute Transactions Per Second (TPS)
+                    if blockTimestampDiff.Seconds() > 0 {
+                        tps = float64(len(block.TransactionsHashes)) / blockTimestampDiff.Seconds()
+                    }
+                }
 
-				if c.opts == nil || c.opts.URL == "" {
-					fmt.Println("❌ pollForBlocks: Options or URL is not set. Skipping this iteration.")
-					return
-				}
+                prevBlock = block
 
-				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-					// We already have a block number for this client, so we can skip this
-					fmt.Println("Already have block")
-					continue
-				}
-				if c.metrics.Block == nil || c.metrics.GasUsed == nil || c.metrics.TPS == nil || c.metrics.BlockTime == nil {
-					// We don't have the metrics, so we can't report them
-					fmt.Println("No metrics")
-					continue
-				}
-				if c.vu.State().Samples == nil {
-					// We don't have the samples, so we can't report them
-					fmt.Println("No samples")
-					continue
-				}
-				metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
-					Samples: []metrics.Sample{
-						{
-							TimeSeries: metrics.TimeSeries{
-								Metric: c.metrics.Block,
-								Tags: rootTS.WithTagsFromMap(map[string]string{
-									"transactions": strconv.Itoa(len(block.TransactionsHashes)),
-									"gas_used":     strconv.Itoa(int(block.GasUsed)),
-									"gas_limit":    strconv.Itoa(int(block.GasLimit)),
-								}),
-							},
-							Value: float64(blockNumber),
-							Time:  time.Now(),
-						},
-						{
-							TimeSeries: metrics.TimeSeries{
-								Metric: c.metrics.GasUsed,
-								Tags: rootTS.WithTagsFromMap(map[string]string{
-									"block": strconv.Itoa(int(blockNumber)),
-								}),
-							},
-							Value: float64(block.GasUsed),
-							Time:  time.Now(),
-						},
-						{
-							TimeSeries: metrics.TimeSeries{
-								Metric: c.metrics.TPS,
-								Tags:   rootTS,
-							},
-							Value: tps,
-							Time:  time.Now(),
-						},
-						{
-							TimeSeries: metrics.TimeSeries{
-								Metric: c.metrics.BlockTime,
-								Tags: rootTS.WithTagsFromMap(map[string]string{
-									"block_timestamp_diff": blockTimestampDiff.String(),
-								}),
-							},
-							Value: float64(blockTime.Milliseconds()),
-							Time:  time.Now(),
-						},
-					},
-				})
-			}
-		}
-	}
+                rootTS := metrics.NewRegistry().RootTagSet()
+                if c.vu != nil && c.vu.State() != nil { // ✅ Fix nil pointer dereference
+                    if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
+                        // We already have a block number for this client, skip it
+                        continue
+                    }
+
+                    metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
+                        Samples: []metrics.Sample{
+                            {
+                                TimeSeries: metrics.TimeSeries{
+                                    Metric: c.metrics.Block,
+                                    Tags: rootTS.WithTagsFromMap(map[string]string{
+                                        "transactions": strconv.Itoa(len(block.TransactionsHashes)),
+                                        "gas_used":     strconv.Itoa(int(block.GasUsed)),
+                                        "gas_limit":    strconv.Itoa(int(block.GasLimit)),
+                                    }),
+                                },
+                                Value: float64(blockNumber),
+                                Time:  time.Now(),
+                            },
+                            {
+                                TimeSeries: metrics.TimeSeries{
+                                    Metric: c.metrics.GasUsed,
+                                    Tags: rootTS.WithTagsFromMap(map[string]string{
+                                        "block": strconv.Itoa(int(blockNumber)),
+                                    }),
+                                },
+                                Value: float64(block.GasUsed),
+                                Time:  time.Now(),
+                            },
+                            {
+                                TimeSeries: metrics.TimeSeries{
+                                    Metric: c.metrics.TPS,
+                                    Tags:   rootTS,
+                                },
+                                Value: tps,
+                                Time:  time.Now(),
+                            },
+                            {
+                                TimeSeries: metrics.TimeSeries{
+                                    Metric: c.metrics.BlockTime,
+                                    Tags: rootTS.WithTagsFromMap(map[string]string{
+                                        "block_timestamp_diff": blockTimestampDiff.String(),
+                                    }),
+                                },
+                                Value: float64(blockTime.Milliseconds()),
+                                Time:  time.Now(),
+                            },
+                        },
+                    })
+                }
+            }
+        }
+    }
 }
