@@ -331,7 +331,6 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 
 var blocks sync.Map
 
-// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
 	var lastBlockNumber uint64
 	var prevBlock *ethgo.Block
@@ -341,26 +340,25 @@ func (c *Client) pollForBlocks() {
 	for range time.Tick(500 * time.Millisecond) {
 		blockNumber, err := c.BlockNumber()
 		if err != nil {
-			//panic(err)
-			fmt.Println("WARN: Recieved an error during block polling. Continuing, but it's indicative of an issue", err)
+			fmt.Println("WARN: Error fetching block number:", err)
 			continue
 		}
 
 		if blockNumber > lastBlockNumber {
-			// compute precise block time
+			// Compute precise block time
 			blockTime := time.Since(now)
 			now = time.Now()
 
 			block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
 			if err != nil {
-				//panic(err)
-				fmt.Println("WARN: Recieved an error during block polling. Continuing, but it's indicative of an issue", err)
+				fmt.Println("WARN: Error fetching block:", err)
 				continue
 			}
 			if block == nil {
-				// We're not going to continue past this point if we don't have a block
+				fmt.Println("WARN: Block is nil, skipping...")
 				continue
 			}
+
 			var blocksProduced uint64 = 0
 			if lastBlockNumber != 0 {
 				blocksProduced = blockNumber - lastBlockNumber
@@ -371,20 +369,21 @@ func (c *Client) pollForBlocks() {
 			var tps float64
 
 			if prevBlock != nil {
-				// compute block time
 				blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-				// Compute TPS
-				tps = float64(len(block.TransactionsHashes)) / float64(blockTimestampDiff.Seconds())
+				if blockTimestampDiff.Seconds() > 0 {
+					tps = float64(len(block.TransactionsHashes)) / blockTimestampDiff.Seconds()
+				} else {
+					tps = 0
+				}
 			}
-
 			prevBlock = block
 
 			rootTS := metrics.NewRegistry().RootTagSet()
-			if c.vu != nil || c.vu.State() != nil || rootTS != nil {
+			if c.vu != nil && c.vu.State() != nil && rootTS != nil { // ✅ Correction ici
 				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-					// We already have a block number for this client, so we can skip this
 					continue
 				}
+
 				metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
 					Samples: []metrics.Sample{
 						{
