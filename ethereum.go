@@ -341,15 +341,28 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 var blocks sync.Map
 
 // PollBlocks polls for new blocks and emits a "block" metric.
+// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
     var lastBlockNumber uint64
     var prevBlock *ethgo.Block
+    var mu sync.Mutex // 🔒 Protection contre l'accès concurrent
+
+    if c.client == nil {
+        fmt.Println("❌ pollForBlocks: client is nil, stopping polling.")
+        return
+    }
+
+    if c.vu == nil || c.metrics.Block == nil {
+        fmt.Println("❌ pollForBlocks: Virtual user or metrics are not initialized.")
+        return
+    }
 
     now := time.Now()
 
     for {
         select {
         case <-c.vu.Context().Done():
+            fmt.Println("🛑 pollForBlocks() stopped gracefully")
             return
         case <-time.After(500 * time.Millisecond):
             blockNumber, err := c.BlockNumber()
@@ -358,6 +371,7 @@ func (c *Client) pollForBlocks() {
                 continue
             }
 
+            mu.Lock() // 🔒 Protection des variables partagées
             if blockNumber > lastBlockNumber {
                 // Compute precise block time
                 blockTime := time.Since(now)
@@ -366,9 +380,11 @@ func (c *Client) pollForBlocks() {
                 block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
                 if err != nil {
                     fmt.Println("⚠️ WARN: Error fetching block details:", err)
+                    mu.Unlock()
                     continue
                 }
                 if block == nil {
+                    mu.Unlock()
                     continue
                 }
 
@@ -382,15 +398,14 @@ func (c *Client) pollForBlocks() {
                 var tps float64
 
                 if prevBlock != nil {
-                    // Compute block time
                     blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-                    // Compute TPS
                     if blockTimestampDiff.Seconds() > 0 {
                         tps = float64(len(block.TransactionsHashes)) / blockTimestampDiff.Seconds()
                     }
                 }
 
                 prevBlock = block
+                mu.Unlock() // 🔓 Libération du verrou
 
                 rootTS := metrics.NewRegistry().RootTagSet()
                 
