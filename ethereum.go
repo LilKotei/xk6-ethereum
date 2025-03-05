@@ -330,10 +330,13 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 }
 
 var blocks sync.Map
+
+
 func (c *Client) pollForBlocks() {
 	var lastBlockNumber uint64
 	var prevBlock *ethgo.Block
 
+	// Vérifier si `c` ou `c.client` sont bien initialisés
 	if c == nil || c.client == nil {
 		fmt.Println("❌ pollForBlocks: Client or RPC client is nil. Exiting poll loop.")
 		return
@@ -364,51 +367,58 @@ func (c *Client) pollForBlocks() {
 				fmt.Println("⚠️ WARN: Error fetching block:", err)
 				continue
 			}
+
+			// ⚠️ Vérifier si `block` est nil avant de continuer
 			if block == nil {
 				fmt.Println("⚠️ WARN: Block is nil, skipping...")
 				continue
 			}
 
-			// Vérifier si prevBlock est bien initialisé
+			// Vérifier si `prevBlock` est bien initialisé
+			var blockTimestampDiff time.Duration
+			var tps float64
+
 			if prevBlock != nil {
-				blockTimestampDiff := time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-				tps := 0.0
+				blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
 				if blockTimestampDiff.Seconds() > 0 {
 					tps = float64(len(block.TransactionsHashes)) / blockTimestampDiff.Seconds()
 				}
-
-				fmt.Println("🟢 Block processed:", blockNumber, "TPS:", tps)
 			}
-			prevBlock = block
 
-			// Vérifier si les métriques et les options sont initialisées
+			prevBlock = block
+			lastBlockNumber = blockNumber
+
+			// Vérifier si les métriques et les options sont bien initialisées
 			if c.metrics.Block == nil || c.opts == nil {
 				fmt.Println("⚠️ WARN: Metrics or options not initialized, skipping metrics reporting.")
 				continue
 			}
 
-			rootTS := metrics.NewRegistry().RootTagSet()
-			if c.vu != nil && c.vu.State() != nil && rootTS != nil {
-				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-					continue
-				}
+			// Vérifier si `c.vu` et `c.vu.State()` ne sont pas nil avant d’accéder aux métriques
+			if c.vu != nil && c.vu.State() != nil {
+				rootTS := metrics.NewRegistry().RootTagSet()
+				if rootTS != nil {
+					if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
+						continue
+					}
 
-				metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
-					Samples: []metrics.Sample{
-						{
-							TimeSeries: metrics.TimeSeries{
-								Metric: c.metrics.Block,
-								Tags: rootTS.WithTagsFromMap(map[string]string{
-									"transactions": strconv.Itoa(len(block.TransactionsHashes)),
-									"gas_used":     strconv.Itoa(int(block.GasUsed)),
-									"gas_limit":    strconv.Itoa(int(block.GasLimit)),
-								}),
+					metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
+						Samples: []metrics.Sample{
+							{
+								TimeSeries: metrics.TimeSeries{
+									Metric: c.metrics.Block,
+									Tags: rootTS.WithTagsFromMap(map[string]string{
+										"transactions": strconv.Itoa(len(block.TransactionsHashes)),
+										"gas_used":     strconv.Itoa(int(block.GasUsed)),
+										"gas_limit":    strconv.Itoa(int(block.GasLimit)),
+									}),
+								},
+								Value: float64(blockNumber),
+								Time:  time.Now(),
 							},
-							Value: float64(blockNumber),
-							Time:  time.Now(),
 						},
-					},
-				})
+					})
+				}
 			}
 		}
 	}
