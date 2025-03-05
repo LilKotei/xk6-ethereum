@@ -352,19 +352,7 @@ func (c *Client) pollForBlocks() {
 
     now := time.Now()
 
-    if c.vu == nil {
-        fmt.Println("❌ pollForBlocks: vu is nil. Stopping.")
-        return
-    }
-    if c.vu.State() == nil {
-        fmt.Println("❌ pollForBlocks: vu.State() is nil. Stopping.")
-        return
-    }
-    if c.opts == nil || c.opts.URL == "" {
-        fmt.Println("❌ pollForBlocks: Options or URL is not set. Stopping.")
-        return
-    }
-
+    
     for {
         select {
         case <-c.vu.Context().Done(): 
@@ -408,16 +396,28 @@ func (c *Client) pollForBlocks() {
 
                 prevBlock = block
 
-                // ✅ Utiliser `c.vu.InitEnv().Registry` pour éviter `nil pointer dereference`
+                // ✅ Use `c.vu.InitEnv().Registry` to avoid nil pointer dereference
                 rootTS := c.vu.InitEnv().Registry.RootTagSet()
-
-                // Vérification stricte avant d'envoyer les metrics
+				// ✅ Ensure `vu`, `vu.State()`, and `opts.URL` are properly set
+				if c.vu == nil {
+					return
+				}
+				if c.vu.State() == nil {
+					return
+				}
+				if c.opts == nil || c.opts.URL == "" {
+					return
+				}
+			
+                // ✅ Strict check before pushing metrics
                 if c.vu != nil && c.vu.State() != nil && rootTS != nil {
                     blockKey := c.opts.URL + strconv.FormatUint(blockNumber, 10)
                     if _, loaded := blocks.LoadOrStore(blockKey, true); loaded {
                         fmt.Println("⚠️ Already processed block:", blockNumber)
                         continue
                     }
+
+                    fmt.Printf("📊 Pushing Metrics - TPS: %.2f | Block: %d | Gas Used: %d\n", tps, blockNumber, block.GasUsed)
 
                     metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
                         Samples: []metrics.Sample{
