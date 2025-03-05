@@ -382,6 +382,12 @@ func (c *Client) pollForBlocks() {
 
 			rootTS := metrics.NewRegistry().RootTagSet()
 			if c.vu != nil && c.vu.State() != nil && rootTS != nil {
+
+				if c.opts == nil || c.opts.URL == "" {
+					fmt.Println("❌ pollForBlocks: Options or URL is not set. Skipping this iteration.")
+					return
+				}
+
 				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
 					// We already have a block number for this client, so we can skip this
 					fmt.Println("Already have block")
