@@ -341,18 +341,29 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 var blocks sync.Map
 
 // PollBlocks polls for new blocks and emits a "block" metric.
+// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
-	fmt.Println("🔄 pollForBlocks() started 1")
+    fmt.Println("🔄 pollForBlocks() started")
+
     var lastBlockNumber uint64
     var prevBlock *ethgo.Block
     var mu sync.Mutex // 🔒 Protection contre les accès concurrents
 
+    // Vérification des composants critiques
     if c.client == nil {
         fmt.Println("❌ pollForBlocks: client is nil, stopping polling.")
         return
     }
-    if c.vu == nil || c.metrics.Block == nil {
-        fmt.Println("❌ pollForBlocks: Virtual user or metrics are not initialized.")
+    if c.vu == nil {
+        fmt.Println("❌ pollForBlocks: Virtual user is nil.")
+        return
+    }
+    if c.vu.State() == nil {
+        fmt.Println("❌ pollForBlocks: vu.State() is nil.")
+        return
+    }
+    if c.metrics.Block == nil {
+        fmt.Println("❌ pollForBlocks: Metrics Block is nil.")
         return
     }
     if c.opts == nil || c.opts.URL == "" {
@@ -360,8 +371,19 @@ func (c *Client) pollForBlocks() {
         return
     }
 
-	fmt.Println("🔄 pollForBlocks() started 2")
+    rootTS := metrics.NewRegistry().RootTagSet()
+    if rootTS == nil {
+        fmt.Println("❌ pollForBlocks: RootTagSet is nil.")
+        return
+    }
+
     now := time.Now()
+
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("🚨 pollForBlocks() crashed, recovered:", r)
+        }
+    }()
 
     for {
         select {
@@ -387,6 +409,7 @@ func (c *Client) pollForBlocks() {
                     continue
                 }
                 if block == nil {
+                    fmt.Println("⚠️ WARN: Received nil block, skipping...")
                     mu.Unlock()
                     continue
                 }
@@ -410,57 +433,59 @@ func (c *Client) pollForBlocks() {
                 prevBlock = block
                 mu.Unlock() // 🔓 Libération du verrou
 
-                rootTS := metrics.NewRegistry().RootTagSet()
-                if c.vu != nil && c.vu.State() != nil && rootTS != nil {
-                    if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-                        continue
-                    }
-
-                    metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
-                        Samples: []metrics.Sample{
-                            {
-                                TimeSeries: metrics.TimeSeries{
-                                    Metric: c.metrics.Block,
-                                    Tags: rootTS.WithTagsFromMap(map[string]string{
-                                        "transactions": strconv.Itoa(len(block.TransactionsHashes)),
-                                        "gas_used":     strconv.Itoa(int(block.GasUsed)),
-                                        "gas_limit":    strconv.Itoa(int(block.GasLimit)),
-                                    }),
-                                },
-                                Value: float64(blocksProduced),
-                                Time:  time.Now(),
-                            },
-                            {
-                                TimeSeries: metrics.TimeSeries{
-                                    Metric: c.metrics.GasUsed,
-                                    Tags: rootTS.WithTagsFromMap(map[string]string{
-                                        "block": strconv.Itoa(int(blockNumber)),
-                                    }),
-                                },
-                                Value: float64(block.GasUsed),
-                                Time:  time.Now(),
-                            },
-                            {
-                                TimeSeries: metrics.TimeSeries{
-                                    Metric: c.metrics.TPS,
-                                    Tags:   rootTS,
-                                },
-                                Value: tps,
-                                Time:  time.Now(),
-                            },
-                            {
-                                TimeSeries: metrics.TimeSeries{
-                                    Metric: c.metrics.BlockTime,
-                                    Tags: rootTS.WithTagsFromMap(map[string]string{
-                                        "block_timestamp_diff": blockTimestampDiff.String(),
-                                    }),
-                                },
-                                Value: float64(blockTime.Milliseconds()),
-                                Time:  time.Now(),
-                            },
-                        },
-                    })
+                if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
+                    continue
                 }
+
+                if c.vu.State() == nil {
+                    fmt.Println("❌ pollForBlocks: vu.State() is nil, skipping metric push.")
+                    continue
+                }
+
+                metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
+                    Samples: []metrics.Sample{
+                        {
+                            TimeSeries: metrics.TimeSeries{
+                                Metric: c.metrics.Block,
+                                Tags: rootTS.WithTagsFromMap(map[string]string{
+                                    "transactions": strconv.Itoa(len(block.TransactionsHashes)),
+                                    "gas_used":     strconv.Itoa(int(block.GasUsed)),
+                                    "gas_limit":    strconv.Itoa(int(block.GasLimit)),
+                                }),
+                            },
+                            Value: float64(blocksProduced),
+                            Time:  time.Now(),
+                        },
+                        {
+                            TimeSeries: metrics.TimeSeries{
+                                Metric: c.metrics.GasUsed,
+                                Tags: rootTS.WithTagsFromMap(map[string]string{
+                                    "block": strconv.Itoa(int(blockNumber)),
+                                }),
+                            },
+                            Value: float64(block.GasUsed),
+                            Time:  time.Now(),
+                        },
+                        {
+                            TimeSeries: metrics.TimeSeries{
+                                Metric: c.metrics.TPS,
+                                Tags:   rootTS,
+                            },
+                            Value: tps,
+                            Time:  time.Now(),
+                        },
+                        {
+                            TimeSeries: metrics.TimeSeries{
+                                Metric: c.metrics.BlockTime,
+                                Tags: rootTS.WithTagsFromMap(map[string]string{
+                                    "block_timestamp_diff": blockTimestampDiff.String(),
+                                }),
+                            },
+                            Value: float64(blockTime.Milliseconds()),
+                            Time:  time.Now(),
+                        },
+                    },
+                })
             }
         }
     }
