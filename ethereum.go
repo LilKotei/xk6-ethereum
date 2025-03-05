@@ -3,6 +3,7 @@ package ethereum
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -52,6 +53,10 @@ func (c *Client) Call(method string, params ...interface{}) (interface{}, error)
 	err := c.client.Call(method, &out, params...)
 	c.reportMetricsFromStats(method, time.Since(t))
 	return out, err
+}
+
+func (c *Client) Close() error {
+	return c.client.Close()
 }
 
 func (c *Client) GasPrice() (uint64, error) {
@@ -191,12 +196,16 @@ func (c *Client) GetTransactionReceipt(hash string) (*ethgo.Receipt, error) {
 }
 
 // WaitForTransactionReceipt waits for the transaction receipt for the given transaction hash.
-func (c *Client) WaitForTransactionReceipt(hash string) *sobek.Promise {
+func (c *Client) WaitForTransactionReceipt(hash string, timeout int) *sobek.Promise {
 	promise, resolve, reject := c.makeHandledPromise()
 	now := time.Now()
 
 	go func() {
 		for {
+			if time.Since(now) > time.Duration(timeout)*time.Second {
+				reject(errors.New("timed out while waiting for receipt"))
+				return
+			}
 			receipt, err := c.GetTransactionReceipt(hash)
 			if err != nil {
 				if err.Error() != "not found" {
@@ -331,94 +340,104 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 
 var blocks sync.Map
 
-
+// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
 	var lastBlockNumber uint64
 	var prevBlock *ethgo.Block
 
-	// Vérifier si `c` ou `c.client` sont bien initialisés
-	if c == nil || c.client == nil {
-		fmt.Println("❌ pollForBlocks: Client or RPC client is nil. Exiting poll loop.")
-		return
-	}
-
 	now := time.Now()
 
 	for range time.Tick(500 * time.Millisecond) {
-		// Vérifier si le client est bien initialisé
-		if c == nil || c.client == nil {
-			fmt.Println("❌ pollForBlocks: Client or RPC client is nil. Exiting loop.")
-			return
-		}
-
 		blockNumber, err := c.BlockNumber()
 		if err != nil {
-			fmt.Println("⚠️ WARN: Error fetching block number:", err)
+			//panic(err)
+			fmt.Println("WARN: Recieved an error during block polling. Continuing, but it's indicative of an issue", err)
 			continue
 		}
 
 		if blockNumber > lastBlockNumber {
-			// Compute precise block time
+			// compute precise block time
 			blockTime := time.Since(now)
 			now = time.Now()
 
 			block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
 			if err != nil {
-				fmt.Println("⚠️ WARN: Error fetching block:", err)
+				//panic(err)
+				fmt.Println("WARN: Recieved an error during block polling. Continuing, but it's indicative of an issue", err)
 				continue
 			}
-
-			// ⚠️ Vérifier si `block` est nil avant de continuer
 			if block == nil {
-				fmt.Println("⚠️ WARN: Block is nil, skipping...")
+				// We're not going to continue past this point if we don't have a block
 				continue
 			}
+			var blocksProduced uint64 = 0
+			if lastBlockNumber != 0 {
+				blocksProduced = blockNumber - lastBlockNumber
+			}
+			lastBlockNumber = blockNumber
 
-			// Vérifier si `prevBlock` est bien initialisé
 			var blockTimestampDiff time.Duration
 			var tps float64
 
 			if prevBlock != nil {
+				// compute block time
 				blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-				if blockTimestampDiff.Seconds() > 0 {
-					tps = float64(len(block.TransactionsHashes)) / blockTimestampDiff.Seconds()
-				}
+				// Compute TPS
+				tps = float64(len(block.TransactionsHashes)) / float64(blockTimestampDiff.Seconds())
 			}
 
 			prevBlock = block
-			lastBlockNumber = blockNumber
 
-			// Vérifier si les métriques et les options sont bien initialisées
-			if c.metrics.Block == nil || c.opts == nil {
-				fmt.Println("⚠️ WARN: Metrics or options not initialized, skipping metrics reporting.")
-				continue
-			}
-
-			// Vérifier si `c.vu` et `c.vu.State()` ne sont pas nil avant d’accéder aux métriques
-			if c.vu != nil && c.vu.State() != nil {
-				rootTS := metrics.NewRegistry().RootTagSet()
-				if rootTS != nil {
-					if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-						continue
-					}
-
-					metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
-						Samples: []metrics.Sample{
-							{
-								TimeSeries: metrics.TimeSeries{
-									Metric: c.metrics.Block,
-									Tags: rootTS.WithTagsFromMap(map[string]string{
-										"transactions": strconv.Itoa(len(block.TransactionsHashes)),
-										"gas_used":     strconv.Itoa(int(block.GasUsed)),
-										"gas_limit":    strconv.Itoa(int(block.GasLimit)),
-									}),
-								},
-								Value: float64(blockNumber),
-								Time:  time.Now(),
-							},
-						},
-					})
+			rootTS := metrics.NewRegistry().RootTagSet()
+			if c.vu != nil && c.vu.State() != nil && rootTS != nil {
+				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
+					// We already have a block number for this client, so we can skip this
+					continue
 				}
+				metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
+					Samples: []metrics.Sample{
+						{
+							TimeSeries: metrics.TimeSeries{
+								Metric: c.metrics.Block,
+								Tags: rootTS.WithTagsFromMap(map[string]string{
+									"transactions": strconv.Itoa(len(block.TransactionsHashes)),
+									"gas_used":     strconv.Itoa(int(block.GasUsed)),
+									"gas_limit":    strconv.Itoa(int(block.GasLimit)),
+								}),
+							},
+							Value: float64(blocksProduced),
+							Time:  time.Now(),
+						},
+						{
+							TimeSeries: metrics.TimeSeries{
+								Metric: c.metrics.GasUsed,
+								Tags: rootTS.WithTagsFromMap(map[string]string{
+									"block": strconv.Itoa(int(blockNumber)),
+								}),
+							},
+							Value: float64(block.GasUsed),
+							Time:  time.Now(),
+						},
+						{
+							TimeSeries: metrics.TimeSeries{
+								Metric: c.metrics.TPS,
+								Tags:   rootTS,
+							},
+							Value: tps,
+							Time:  time.Now(),
+						},
+						{
+							TimeSeries: metrics.TimeSeries{
+								Metric: c.metrics.BlockTime,
+								Tags: rootTS.WithTagsFromMap(map[string]string{
+									"block_timestamp_diff": blockTimestampDiff.String(),
+								}),
+							},
+							Value: float64(blockTime.Milliseconds()),
+							Time:  time.Now(),
+						},
+					},
+				})
 			}
 		}
 	}
