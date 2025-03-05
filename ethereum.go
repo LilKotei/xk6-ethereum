@@ -341,19 +341,21 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 var blocks sync.Map
 
 // PollBlocks polls for new blocks and emits a "block" metric.
-// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
     var lastBlockNumber uint64
     var prevBlock *ethgo.Block
-    var mu sync.Mutex // 🔒 Protection contre l'accès concurrent
+    var mu sync.Mutex // 🔒 Protection contre les accès concurrents
 
     if c.client == nil {
         fmt.Println("❌ pollForBlocks: client is nil, stopping polling.")
         return
     }
-
     if c.vu == nil || c.metrics.Block == nil {
         fmt.Println("❌ pollForBlocks: Virtual user or metrics are not initialized.")
+        return
+    }
+    if c.opts == nil || c.opts.URL == "" {
+        fmt.Println("❌ pollForBlocks: Options or URL is not set.")
         return
     }
 
@@ -373,7 +375,6 @@ func (c *Client) pollForBlocks() {
 
             mu.Lock() // 🔒 Protection des variables partagées
             if blockNumber > lastBlockNumber {
-                // Compute precise block time
                 blockTime := time.Since(now)
                 now = time.Now()
 
@@ -408,7 +409,6 @@ func (c *Client) pollForBlocks() {
                 mu.Unlock() // 🔓 Libération du verrou
 
                 rootTS := metrics.NewRegistry().RootTagSet()
-                
                 if c.vu != nil && c.vu.State() != nil && rootTS != nil {
                     if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
                         continue
