@@ -352,11 +352,20 @@ func (c *Client) pollForBlocks() {
 
     now := time.Now()
 
-    
+    // ✅ Ensure `vu`, `vu.State()`, and `opts.URL` are properly set
+    if c.vu == nil {
+        return
+    }
+    if c.vu.State() == nil {
+        return
+    }
+    if c.opts == nil || c.opts.URL == "" {
+        return
+    }
+
     for {
         select {
         case <-c.vu.Context().Done(): 
-            fmt.Println("🛑 pollForBlocks() stopped gracefully")
             return
 
         case <-ticker.C:
@@ -398,17 +407,7 @@ func (c *Client) pollForBlocks() {
 
                 // ✅ Use `c.vu.InitEnv().Registry` to avoid nil pointer dereference
                 rootTS := c.vu.InitEnv().Registry.RootTagSet()
-				// ✅ Ensure `vu`, `vu.State()`, and `opts.URL` are properly set
-				if c.vu == nil {
-					return
-				}
-				if c.vu.State() == nil {
-					return
-				}
-				if c.opts == nil || c.opts.URL == "" {
-					return
-				}
-			
+
                 // ✅ Strict check before pushing metrics
                 if c.vu != nil && c.vu.State() != nil && rootTS != nil {
                     blockKey := c.opts.URL + strconv.FormatUint(blockNumber, 10)
