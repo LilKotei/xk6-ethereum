@@ -342,6 +342,7 @@ var blocks sync.Map
 
 // PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
+	fmt.Println("🔄 pollForBlocks() started 1")
     var lastBlockNumber uint64
     var prevBlock *ethgo.Block
     var mu sync.Mutex // 🔒 Protection contre les accès concurrents
@@ -359,6 +360,7 @@ func (c *Client) pollForBlocks() {
         return
     }
 
+	fmt.Println("🔄 pollForBlocks() started 2")
     now := time.Now()
 
     for {
