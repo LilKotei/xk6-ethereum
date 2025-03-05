@@ -342,6 +342,8 @@ var blocks sync.Map
 
 // pollForBlocks polls for new blocks and emits block-related metrics.
 func (c *Client) pollForBlocks() {
+    fmt.Println("🔄 pollForBlocks() started")
+
     ticker := time.NewTicker(500 * time.Millisecond)
     defer ticker.Stop() // ✅ Stop the ticker when function exits
 
@@ -350,9 +352,23 @@ func (c *Client) pollForBlocks() {
 
     now := time.Now()
 
+    if c.vu == nil {
+        fmt.Println("❌ pollForBlocks: vu is nil. Stopping.")
+        return
+    }
+    if c.vu.State() == nil {
+        fmt.Println("❌ pollForBlocks: vu.State() is nil. Stopping.")
+        return
+    }
+    if c.opts == nil || c.opts.URL == "" {
+        fmt.Println("❌ pollForBlocks: Options or URL is not set. Stopping.")
+        return
+    }
+
     for {
         select {
-        case <-c.vu.Context().Done(): // ✅ Stop the loop when the VU is finished
+        case <-c.vu.Context().Done(): 
+            fmt.Println("🛑 pollForBlocks() stopped gracefully")
             return
 
         case <-ticker.C:
@@ -392,10 +408,14 @@ func (c *Client) pollForBlocks() {
 
                 prevBlock = block
 
-                rootTS := metrics.NewRegistry().RootTagSet()
-                if c.vu != nil && c.vu.State() != nil { // ✅ Fix nil pointer dereference
-                    if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-                        // We already have a block number for this client, skip it
+                // ✅ Utiliser `c.vu.InitEnv().Registry` pour éviter `nil pointer dereference`
+                rootTS := c.vu.InitEnv().Registry.RootTagSet()
+
+                // Vérification stricte avant d'envoyer les metrics
+                if c.vu != nil && c.vu.State() != nil && rootTS != nil {
+                    blockKey := c.opts.URL + strconv.FormatUint(blockNumber, 10)
+                    if _, loaded := blocks.LoadOrStore(blockKey, true); loaded {
+                        fmt.Println("⚠️ Already processed block:", blockNumber)
                         continue
                     }
 
