@@ -42,6 +42,13 @@ type Client struct {
 	opts    *options
 }
 
+// Standard ERC20 ABI fragment with mint and transfer functions.
+// Extend this as needed.
+const erc20ABI = `[
+	{"constant": false, "inputs": [{"name": "_to", "type": "address"},{"name": "_amount", "type": "uint256"}], "name": "mint", "outputs": [], "type": "function"},
+	{"constant": false, "inputs": [{"name": "_to", "type": "address"},{"name": "_value", "type": "uint256"}], "name": "transfer", "outputs": [{"name": "","type": "bool"}], "type": "function"}
+]`
+
 func (c *Client) Exports() modules.Exports {
 	return modules.Exports{}
 }
@@ -304,6 +311,62 @@ func (c *Client) DeployContract(abistr string, bytecode string, args ...interfac
 	}
 
 	return receipt, nil
+}
+
+// ERC20Mint mints new tokens by calling the ERC20 mint function on a given contract.
+// - contractAddress: ERC20 token contract address (hex string)
+// - to: recipient address (hex string)
+// - amount: token amount as *big.Int
+func (c *Client) ERC20Mint(contractAddress, to string, amount *big.Int) (string, error) {
+	// Parse the ERC20 ABI.
+	parsedABI, err := abi.NewABI(erc20ABI)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse ERC20 ABI: %w", err)
+	}
+
+	// Retrieve the "mint" method from the ABI.
+	mintMethod, ok := parsedABI.Methods["mint"]
+	if !ok {
+		return "", fmt.Errorf("mint method not found in ABI")
+	}
+
+	// Pack the call data using the method's Encode function.
+	data, err := mintMethod.Encode([]any{ethgo.HexToAddress(to), amount})
+	if err != nil {
+		return "", fmt.Errorf("failed to encode mint arguments: %w", err)
+	}
+
+	// Get the sender address from the client's wallet.
+	senderAddress := c.w.Address().String()
+
+	// Retrieve the current nonce and gas price.
+	nonce, err := c.GetNonce(senderAddress)
+	if err != nil {
+		return "", fmt.Errorf("failed to get nonce: %w", err)
+	}
+	gasPrice, err := c.GasPrice()
+	if err != nil {
+		return "", fmt.Errorf("failed to get gas price: %w", err)
+	}
+
+	// Build the transaction.
+	tx := Transaction{
+		From:     senderAddress,
+		To:       contractAddress,
+		Input:    data,
+		Gas:      100000, // default gas limit; you can adjust or estimate
+		GasPrice: gasPrice,
+		Nonce:    nonce,
+		ChainId:  c.chainID.Int64(),
+	}
+
+	// Optionally update the gas limit using gas estimation.
+	if estimatedGas, err := c.EstimateGas(tx); err == nil {
+		tx.Gas = estimatedGas
+	}
+
+	// Send the transaction.
+	return c.SendRawTransaction(tx)
 }
 
 // makeHandledPromise will create a promise and return its resolve and reject methods,
