@@ -102,7 +102,7 @@ func (c *Client) EstimateGas(tx Transaction) (uint64, error) {
 
 	gas, err := c.client.Eth().EstimateGas(msg)
 	if err != nil {
-		return 0, fmt.Errorf("failed to estimate gas: %e", err)
+		return 0, fmt.Errorf("failed to estimate gas: %w", err)
 	}
 
 	return gas, nil
@@ -262,10 +262,6 @@ func (c *Client) NewContract(address string, abistr string) (*Contract, error) {
 	}
 
 	contract := contract.NewContract(ethgo.HexToAddress(address), contractABI, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create contract: %w", err)
-	}
-
 	return &Contract{
 		Contract: contract,
 		client:   c,
