@@ -375,19 +375,14 @@ func (c *Client) ERC20Balance(contractAddress, account string) (*big.Int, error)
 		return nil, fmt.Errorf("failed to call balanceOf: %w", err)
 	}
 	fmt.Printf("balanceOf call result: %s\n", result) // Debug log
-	retVals, err := balanceMethod.Outputs.Decode([]byte(result))
+
+	// Decode the result
+	var balance big.Int
+	err = balance.UnmarshalText([]byte(result))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode balanceOf return: %w", err)
 	}
-	retValsSlice, ok := retVals.([]interface{})
-	if !ok || len(retValsSlice) < 1 {
-		return nil, fmt.Errorf("no return value from balanceOf")
-	}
-	balance, ok := retValsSlice[0].(*big.Int)
-	if !ok {
-		return nil, fmt.Errorf("unexpected return type for balanceOf")
-	}
-	return balance, nil
+	return &balance, nil
 }
 
 func (c *Client) ERC20TotalSupply(contractAddress string) (*big.Int, error) {
