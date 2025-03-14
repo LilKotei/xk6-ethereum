@@ -42,13 +42,27 @@ type Client struct {
 	opts    *options
 }
 
-// Standard ERC20 ABI fragment with mint and transfer functions.
-// Extend this as needed.
+// ---------------------------------------------------------------------
+// ERC20 Write ABI (for mint and transfer)
+// ---------------------------------------------------------------------
 const erc20ABI = `[
 	{"constant": false, "inputs": [{"name": "_to", "type": "address"},{"name": "_amount", "type": "uint256"}], "name": "mint", "outputs": [], "type": "function"},
 	{"constant": false, "inputs": [{"name": "_to", "type": "address"},{"name": "_value", "type": "uint256"}], "name": "transfer", "outputs": [{"name": "","type": "bool"}], "type": "function"}
 ]`
 
+// ---------------------------------------------------------------------
+// ERC20 Read ABI (for balanceOf, totalSupply, allowance)
+// ---------------------------------------------------------------------
+const erc20ReadABI = `[
+	{"constant": true, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
+	{"constant": true, "inputs": [], "name": "totalSupply", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
+	{"constant": true, "inputs": [{"name": "_owner", "type": "address"},{"name": "_spender", "type": "address"}], "name": "allowance", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}
+]`
+
+// ---------------------------------------------------------------------
+// Exported ERC20 utilities for k6 scripts.
+// These functions do not affect the native functions.
+// ---------------------------------------------------------------------
 func (c *Client) Exports() modules.Exports {
 	return modules.Exports{}
 }
@@ -73,25 +87,20 @@ func (c *Client) GetBalance(address string, blockNumber ethgo.BlockNumber) (uint
 	return b.Uint64(), err
 }
 
-// BlockNumber returns the current block number.
 func (c *Client) BlockNumber() (uint64, error) {
 	return c.client.Eth().BlockNumber()
 }
 
-// GetBlockByNumber returns the block with the given block number.
 func (c *Client) GetBlockByNumber(number ethgo.BlockNumber, full bool) (*ethgo.Block, error) {
 	return c.client.Eth().GetBlockByNumber(number, full)
 }
 
-// GetNonce returns the nonce for the given address.
 func (c *Client) GetNonce(address string) (uint64, error) {
 	return c.client.Eth().GetNonce(ethgo.HexToAddress(address), ethgo.Pending)
 }
 
-// EstimateGas returns the estimated gas for the given transaction.
 func (c *Client) EstimateGas(tx Transaction) (uint64, error) {
 	to := ethgo.HexToAddress(tx.To)
-
 	msg := &ethgo.CallMsg{
 		From:     c.w.Address(),
 		To:       &to,
@@ -99,27 +108,21 @@ func (c *Client) EstimateGas(tx Transaction) (uint64, error) {
 		Data:     tx.Input,
 		GasPrice: tx.GasPrice,
 	}
-
 	gas, err := c.client.Eth().EstimateGas(msg)
 	if err != nil {
 		return 0, fmt.Errorf("failed to estimate gas: %w", err)
 	}
-
 	return gas, nil
 }
 
-// SendTransaction sends a transaction to the network.
 func (c *Client) SendTransaction(tx Transaction) (string, error) {
 	to := ethgo.HexToAddress(tx.To)
-
 	if tx.Gas == 0 {
 		tx.Gas = 21000
 	}
-
 	if tx.GasPrice == 0 && tx.GasFeeCap == 0 && tx.GasTipCap == 0 {
 		tx.GasPrice = 5242880
 	}
-
 	t := &ethgo.Transaction{
 		Type:     ethgo.TransactionLegacy,
 		From:     ethgo.HexToAddress(tx.From),
@@ -128,27 +131,22 @@ func (c *Client) SendTransaction(tx Transaction) (string, error) {
 		Gas:      tx.Gas,
 		GasPrice: tx.GasPrice,
 	}
-
 	if tx.GasFeeCap > 0 || tx.GasTipCap > 0 {
 		t.Type = ethgo.TransactionDynamicFee
 		t.GasPrice = 0
 		t.MaxFeePerGas = big.NewInt(0).SetUint64(tx.GasFeeCap)
 		t.MaxPriorityFeePerGas = big.NewInt(0).SetUint64(tx.GasTipCap)
 	}
-
 	h, err := c.client.Eth().SendTransaction(t)
 	return h.String(), err
 }
 
-// SendRawTransaction signs and sends transaction to the network.
 func (c *Client) SendRawTransaction(tx Transaction) (string, error) {
 	to := ethgo.HexToAddress(tx.To)
-
 	gas, err := c.EstimateGas(tx)
 	if err != nil {
 		return "", err
 	}
-
 	t := &ethgo.Transaction{
 		Type:     ethgo.TransactionLegacy,
 		From:     c.w.Address(),
@@ -160,48 +158,39 @@ func (c *Client) SendRawTransaction(tx Transaction) (string, error) {
 		Input:    tx.Input,
 		ChainID:  c.chainID,
 	}
-
 	if tx.GasFeeCap > 0 || tx.GasTipCap > 0 {
 		t.Type = ethgo.TransactionDynamicFee
 		t.GasPrice = 0
 		t.MaxFeePerGas = big.NewInt(0).SetUint64(tx.GasFeeCap)
 		t.MaxPriorityFeePerGas = big.NewInt(0).SetUint64(tx.GasTipCap)
 	}
-
 	s := wallet.NewEIP155Signer(t.ChainID.Uint64())
 	st, err := s.SignTx(t, c.w)
 	if err != nil {
 		return "", err
 	}
-
 	trlp, err := st.MarshalRLPTo(nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal tx: %e", err)
 	}
-
 	h, err := c.client.Eth().SendRawTransaction(trlp)
 	return h.String(), err
 }
 
-// GetTransactionReceipt returns the transaction receipt for the given transaction hash.
 func (c *Client) GetTransactionReceipt(hash string) (*ethgo.Receipt, error) {
 	r, err := c.client.Eth().GetTransactionReceipt(ethgo.HexToHash(hash))
 	if err != nil {
 		return nil, err
 	}
-
 	if r != nil {
 		return r, nil
 	}
-
 	return nil, fmt.Errorf("not found")
 }
 
-// WaitForTransactionReceipt waits for the transaction receipt for the given transaction hash.
 func (c *Client) WaitForTransactionReceipt(hash string) *sobek.Promise {
 	promise, resolve, reject := c.makeHandledPromise()
 	now := time.Now()
-
 	go func() {
 		for {
 			receipt, err := c.GetTransactionReceipt(hash)
@@ -212,9 +201,7 @@ func (c *Client) WaitForTransactionReceipt(hash string) *sobek.Promise {
 				}
 			}
 			if receipt != nil {
-				// If we are testing vu is nil
 				if c.vu != nil {
-					// Report metrics
 					metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.Sample{
 						TimeSeries: metrics.TimeSeries{
 							Metric: c.metrics.TimeToMine,
@@ -230,37 +217,30 @@ func (c *Client) WaitForTransactionReceipt(hash string) *sobek.Promise {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
-
 	return promise
 }
 
-// Accounts returns a list of addresses owned by client. This endpoint is not enabled in infrastructure providers.
 func (c *Client) Accounts() ([]string, error) {
 	accounts, err := c.client.Eth().Accounts()
 	if err != nil {
 		return nil, err
 	}
-
 	addresses := make([]string, len(accounts))
 	for i, a := range accounts {
 		addresses[i] = a.String()
 	}
-
 	return addresses, nil
 }
 
-// NewContract creates a new contract instance with the given ABI.
 func (c *Client) NewContract(address string, abistr string) (*Contract, error) {
 	contractABI, err := abi.NewABI(abistr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse abi: %w", err)
 	}
-
 	opts := []contract.ContractOption{
 		contract.WithJsonRPC(c.client.Eth()),
 		contract.WithSender(c.w),
 	}
-
 	contract := contract.NewContract(ethgo.HexToAddress(address), contractABI, opts...)
 	return &Contract{
 		Contract: contract,
@@ -268,26 +248,19 @@ func (c *Client) NewContract(address string, abistr string) (*Contract, error) {
 	}, nil
 }
 
-// DeployContract deploys a contract to the blockchain.
 func (c *Client) DeployContract(abistr string, bytecode string, args ...interface{}) (*ethgo.Receipt, error) {
-	// Parse ABI
 	contractABI, err := abi.NewABI(abistr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse abi: %w", err)
 	}
-
-	// Parse bytecode
 	contractBytecode, err := hex.DecodeString(bytecode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode bytecode: %w", err)
 	}
-
 	opts := []contract.ContractOption{
 		contract.WithJsonRPC(c.client.Eth()),
 		contract.WithSender(c.w),
 	}
-
-	// Deploy contract
 	txn, err := contract.DeployContract(contractABI, contractBytecode, args, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy contract: %w", err)
@@ -295,47 +268,34 @@ func (c *Client) DeployContract(abistr string, bytecode string, args ...interfac
 	txn.WithOpts(&contract.TxnOpts{
 		GasLimit: 1500000,
 	})
-
 	err = txn.Do()
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy contract: %w", err)
 	}
-
 	receipt, err := txn.Wait()
 	if err != nil {
 		return nil, fmt.Errorf("failed waiting to deploy contract: %w", err)
 	}
-
 	return receipt, nil
 }
 
-// ERC20Mint mints new tokens by calling the ERC20 mint function on a given contract.
-// - contractAddress: ERC20 token contract address (hex string)
-// - to: recipient address (hex string)
-// - amount: token amount as *big.Int
+// ---------------------------------------------------------------------
+// ERC20 Write Utility: Mint tokens
+// ---------------------------------------------------------------------
 func (c *Client) ERC20Mint(contractAddress, to string, amount *big.Int) (string, error) {
-	// Parse the ERC20 ABI.
 	parsedABI, err := abi.NewABI(erc20ABI)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse ERC20 ABI: %w", err)
 	}
-
-	// Retrieve the "mint" method from the ABI.
 	mintMethod, ok := parsedABI.Methods["mint"]
 	if !ok {
 		return "", fmt.Errorf("mint method not found in ABI")
 	}
-
-	// Pack the call data using the method's Encode function.
 	data, err := mintMethod.Encode([]any{ethgo.HexToAddress(to), amount})
 	if err != nil {
 		return "", fmt.Errorf("failed to encode mint arguments: %w", err)
 	}
-
-	// Get the sender address from the client's wallet.
 	senderAddress := c.w.Address().String()
-
-	// Retrieve the current nonce and gas price.
 	nonce, err := c.GetNonce(senderAddress)
 	if err != nil {
 		return "", fmt.Errorf("failed to get nonce: %w", err)
@@ -344,43 +304,192 @@ func (c *Client) ERC20Mint(contractAddress, to string, amount *big.Int) (string,
 	if err != nil {
 		return "", fmt.Errorf("failed to get gas price: %w", err)
 	}
-
-	// Build the transaction.
 	tx := Transaction{
 		From:     senderAddress,
 		To:       contractAddress,
 		Input:    data,
-		Gas:      100000, // default gas limit; you can adjust or estimate
+		Gas:      100000,
 		GasPrice: gasPrice,
 		Nonce:    nonce,
 		ChainId:  c.chainID.Int64(),
 	}
-
-	// Optionally update the gas limit using gas estimation.
 	if estimatedGas, err := c.EstimateGas(tx); err == nil {
 		tx.Gas = estimatedGas
 	}
-
-	// Send the transaction.
 	return c.SendRawTransaction(tx)
 }
 
-// makeHandledPromise will create a promise and return its resolve and reject methods,
-// wrapped in such a way that it will block the eventloop from exiting before they are
-// called even if the promise isn't resolved by the time the current script ends executing.
+func (c *Client) mintExported(contractAddress, to, amountStr string) (interface{}, error) {
+	amount, ok := new(big.Int).SetString(amountStr, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid amount: %s", amountStr)
+	}
+	return c.ERC20Mint(contractAddress, to, amount)
+}
+
+// ---------------------------------------------------------------------
+// ERC20 Read Utilities: Balance, Total Supply, and Allowance
+// ---------------------------------------------------------------------
+func (c *Client) ERC20Balance(contractAddress, account string) (*big.Int, error) {
+	parsedABI, err := abi.NewABI(erc20ReadABI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ERC20 read ABI: %w", err)
+	}
+	balanceMethod, ok := parsedABI.Methods["balanceOf"]
+	if !ok {
+		return nil, fmt.Errorf("balanceOf method not found in ERC20 read ABI")
+	}
+	data, err := balanceMethod.Encode([]any{ethgo.HexToAddress(account)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode balanceOf arguments: %w", err)
+	}
+	toAddress := ethgo.HexToAddress(contractAddress)
+	callMsg := &ethgo.CallMsg{
+		From: c.w.Address(),
+		To:   &toAddress,
+		Data: data,
+	}
+	result, err := c.client.Eth().Call(callMsg, ethgo.Latest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call balanceOf: %w", err)
+	}
+	retVals, err := balanceMethod.Outputs.Decode([]byte(result))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode balanceOf return: %w", err)
+	}
+	retValsSlice, ok := retVals.([]interface{})
+	if !ok || len(retValsSlice) < 1 {
+		return nil, fmt.Errorf("no return value from balanceOf")
+	}
+	balance, ok := retValsSlice[0].(*big.Int)
+	if !ok {
+		return nil, fmt.Errorf("unexpected return type for balanceOf")
+	}
+	return balance, nil
+}
+
+func (c *Client) ERC20TotalSupply(contractAddress string) (*big.Int, error) {
+	parsedABI, err := abi.NewABI(erc20ReadABI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ERC20 read ABI: %w", err)
+	}
+	totalSupplyMethod, ok := parsedABI.Methods["totalSupply"]
+	if !ok {
+		return nil, fmt.Errorf("totalSupply method not found in ERC20 read ABI")
+	}
+	data, err := totalSupplyMethod.Encode([]any{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode totalSupply arguments: %w", err)
+	}
+	toAddress := ethgo.HexToAddress(contractAddress)
+	callMsg := &ethgo.CallMsg{
+		From: c.w.Address(),
+		To:   &toAddress,
+		Data: data,
+	}
+	result, err := c.client.Eth().Call(callMsg, ethgo.Latest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call totalSupply: %w", err)
+	}
+	retVals, err := totalSupplyMethod.Outputs.Decode([]byte(result))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode totalSupply return: %w", err)
+	}
+	retValsSlice, ok := retVals.([]interface{})
+	if !ok || len(retValsSlice) < 1 {
+		return nil, fmt.Errorf("no return value from totalSupply")
+	}
+	retValsSlice, ok = retVals.([]interface{})
+	if !ok || len(retValsSlice) < 1 {
+		return nil, fmt.Errorf("no return value from totalSupply")
+	}
+	totalSupply, ok := retValsSlice[0].(*big.Int)
+	if !ok {
+		return nil, fmt.Errorf("unexpected return type for totalSupply")
+	}
+	return totalSupply, nil
+}
+
+func (c *Client) ERC20Allowance(contractAddress, owner, spender string) (*big.Int, error) {
+	parsedABI, err := abi.NewABI(erc20ReadABI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ERC20 read ABI: %w", err)
+	}
+	allowanceMethod, ok := parsedABI.Methods["allowance"]
+	if !ok {
+		return nil, fmt.Errorf("allowance method not found in ERC20 read ABI")
+	}
+	data, err := allowanceMethod.Encode([]any{ethgo.HexToAddress(owner), ethgo.HexToAddress(spender)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode allowance arguments: %w", err)
+	}
+	toAddress := ethgo.HexToAddress(contractAddress)
+	callMsg := &ethgo.CallMsg{
+		From: c.w.Address(),
+		To:   &toAddress,
+		Data: data,
+	}
+	result, err := c.client.Eth().Call(callMsg, ethgo.Latest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call allowance: %w", err)
+	}
+	retVals, err := allowanceMethod.Outputs.Decode([]byte(result))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode allowance return: %w", err)
+	}
+	retValsSlice, ok := retVals.([]interface{})
+	if !ok || len(retValsSlice) < 1 {
+		return nil, fmt.Errorf("no return value from allowance")
+	}
+	retValsSlice, ok = retVals.([]interface{})
+	if !ok || len(retValsSlice) < 1 {
+		return nil, fmt.Errorf("no return value from allowance")
+	}
+	allowance, ok := retValsSlice[0].(*big.Int)
+	if !ok {
+		return nil, fmt.Errorf("unexpected return type for allowance")
+	}
+	return allowance, nil
+}
+
+// Exported wrappers for ERC20 read utilities.
+func (c *Client) erc20BalanceExported(contractAddress, account string) (string, error) {
+	balance, err := c.ERC20Balance(contractAddress, account)
+	if err != nil {
+		return "", err
+	}
+	return balance.String(), nil
+}
+
+func (c *Client) erc20TotalSupplyExported(contractAddress string) (string, error) {
+	totalSupply, err := c.ERC20TotalSupply(contractAddress)
+	if err != nil {
+		return "", err
+	}
+	return totalSupply.String(), nil
+}
+
+func (c *Client) erc20AllowanceExported(contractAddress, owner, spender string) (string, error) {
+	allowance, err := c.ERC20Allowance(contractAddress, owner, spender)
+	if err != nil {
+		return "", err
+	}
+	return allowance.String(), nil
+}
+
+// ---------------------------------------------------------------------
+// makeHandledPromise and pollForBlocks (unchanged)
+// ---------------------------------------------------------------------
 func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(interface{})) {
 	runtime := c.vu.Runtime()
 	callback := c.vu.RegisterCallback()
 	p, resolve, reject := runtime.NewPromise()
-
 	return p, func(i interface{}) {
-			// more stuff
 			callback(func() error {
 				resolve(i)
 				return nil
 			})
 		}, func(i interface{}) {
-			// more stuff
 			callback(func() error {
 				reject(i)
 				return nil
@@ -390,53 +499,38 @@ func (c *Client) makeHandledPromise() (*sobek.Promise, func(interface{}), func(i
 
 var blocks sync.Map
 
-// PollBlocks polls for new blocks and emits a "block" metric.
 func (c *Client) pollForBlocks() {
 	var lastBlockNumber uint64
 	var prevBlock *ethgo.Block
-
 	now := time.Now()
-
 	for range time.Tick(500 * time.Millisecond) {
 		blockNumber, err := c.BlockNumber()
 		if err != nil {
 			panic(err)
 		}
-
 		if blockNumber > lastBlockNumber {
-			// compute precise block time
 			blockTime := time.Since(now)
 			now = time.Now()
-
 			block, err := c.GetBlockByNumber(ethgo.BlockNumber(blockNumber), false)
 			if err != nil {
 				panic(err)
 			}
 			if block == nil {
-				// We're not going to continue past this point if we don't have a bloc
 				continue
 			}
 			lastBlockNumber = blockNumber
-
 			var blockTimestampDiff time.Duration
 			var tps float64
-
 			if prevBlock != nil {
-				// compute block time
 				blockTimestampDiff = time.Unix(int64(block.Timestamp), 0).Sub(time.Unix(int64(prevBlock.Timestamp), 0))
-				// Compute TPS
 				tps = float64(len(block.TransactionsHashes)) / float64(blockTimestampDiff.Seconds())
 			}
-
 			prevBlock = block
-
 			rootTS := metrics.NewRegistry().RootTagSet()
 			if c.vu != nil && c.vu.State() != nil && rootTS != nil {
 				if _, loaded := blocks.LoadOrStore(c.opts.URL+strconv.FormatUint(blockNumber, 10), true); loaded {
-					// We already have a block number for this client, so we can skip this
 					continue
 				}
-
 				metrics.PushIfNotDone(c.vu.Context(), c.vu.State().Samples, metrics.ConnectedSamples{
 					Samples: []metrics.Sample{
 						{
