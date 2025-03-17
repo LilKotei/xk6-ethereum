@@ -129,7 +129,6 @@ func (c *Client) EstimateGas(tx Transaction) (uint64, error) {
 		Data:     tx.Input,
 		GasPrice: tx.GasPrice,
 	}
-	fmt.Printf("details: %+v\n", msg)
 	gas, err := c.client.Eth().EstimateGas(msg)
 	if err != nil {
 		return 0, fmt.Errorf("failed to estimate gas: %w", err)
