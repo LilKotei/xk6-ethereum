@@ -168,6 +168,7 @@ func (c *Client) SendRawTransaction(tx Transaction) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fmt.Printf("tx: %+v\n", tx)
 	t := &ethgo.Transaction{
 		Type:     ethgo.TransactionLegacy,
 		From:     c.w.Address(),
