@@ -164,11 +164,11 @@ func (c *Client) SendTransaction(tx Transaction) (string, error) {
 
 func (c *Client) SendRawTransaction(tx Transaction) (string, error) {
 	to := ethgo.HexToAddress(tx.To)
+	fmt.Printf("tx: %+v\n", tx)
 	gas, err := c.EstimateGas(tx)
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("tx: %+v\n", tx)
 	t := &ethgo.Transaction{
 		Type:     ethgo.TransactionLegacy,
 		From:     c.w.Address(),
